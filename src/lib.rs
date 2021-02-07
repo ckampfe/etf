@@ -1,7 +1,6 @@
-#[forbid(unsafe_code)]
+#![forbid(unsafe_code)]
 use std::collections::BTreeMap;
 
-// alphabetical order
 const ATOM_TAG: u8 = 100;
 const ATOM_UTF8_TAG: u8 = 118;
 const BINARY_TAG: u8 = 109;
@@ -19,13 +18,20 @@ const SMALL_INTEGER_TAG: u8 = 97;
 const SMALL_TUPLE_TAG: u8 = 104;
 const VERSION_NUMBER_TAG: u8 = 131;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Error<'e> {
-    Incomplete(Needed),
-    Error(&'e [u8]),
+    Incomplete(&'e [u8], Needed),
+    Error(&'e [u8], ErrorKind),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
+pub enum ErrorKind {
+    InvalidBigInt,
+    Utf8Error(std::str::Utf8Error),
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Needed {
     Needed(usize),
     Unknown,
@@ -48,8 +54,7 @@ pub enum Term<'a> {
 pub fn parse(s: &[u8]) -> Result<Term, Error> {
     let (_, term) = match s {
         [VERSION_NUMBER_TAG, rest @ ..] => term(rest)?,
-        [] => return Err(Error::Incomplete(Needed::Unknown)),
-        input => return Err(Error::Error(input)),
+        input => return Err(Error::Error(input, ErrorKind::Unknown)),
     };
 
     Ok(term)
@@ -72,8 +77,7 @@ fn term(s: &[u8]) -> Result<(&[u8], Term), Error> {
         [SMALL_ATOM, rest @ ..] => small_atom(rest),
         [SMALL_BIG_TAG, rest @ ..] => small_big(rest),
         [LARGE_BIG_TAG, rest @ ..] => large_big(rest),
-        [] => Err(Error::Incomplete(Needed::Unknown)),
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(1))),
     }
 }
 
@@ -83,18 +87,15 @@ fn atom(s: &[u8]) -> Result<(&[u8], Term), Error> {
             let len = u16::from_be_bytes([*a, *b]) as usize;
             if len <= s.len() {
                 let (string_bytes, s) = s.split_at(len);
-                let inner = std::str::from_utf8(string_bytes);
-
-                if let Ok(inner) = inner {
-                    Ok((s, Term::Atom(inner)))
-                } else {
-                    Err(Error::Error(s))
+                match std::str::from_utf8(string_bytes) {
+                    Ok(inner) => Ok((s, Term::Atom(inner))),
+                    Err(e) => Err(Error::Error(s, ErrorKind::Utf8Error(e))),
                 }
             } else {
-                Err(Error::Error(s))
+                Err(Error::Incomplete(s, Needed::Needed(len - s.len())))
             }
         }
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(2 - input.len()))),
     }
 }
 
@@ -106,37 +107,36 @@ fn atom_utf8(s: &[u8]) -> Result<(&[u8], Term), Error> {
                 let (string_bytes, s) = s.split_at(len);
                 let inner = std::str::from_utf8(string_bytes);
 
-                if let Ok(inner) = inner {
-                    Ok((s, Term::Atom(inner)))
-                } else {
-                    Err(Error::Error(s))
+                match inner {
+                    Ok(inner) => Ok((s, Term::Atom(inner))),
+                    Err(e) => Err(Error::Error(s, ErrorKind::Utf8Error(e))),
                 }
             } else {
-                Err(Error::Error(s))
+                Err(Error::Incomplete(s, Needed::Needed(len - s.len())))
             }
         }
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(2 - input.len()))),
     }
 }
 
 fn binary(s: &[u8]) -> Result<(&[u8], Term), Error> {
     match s {
+        [0, 0, 0, 0] => Ok((&[], Term::Binary(""))),
         [b1, b2, b3, b4, s @ ..] => {
             let len = u32::from_be_bytes([*b1, *b2, *b3, *b4]) as usize;
             if len <= s.len() {
                 let (string_bytes, s) = s.split_at(len);
                 let inner = std::str::from_utf8(string_bytes);
 
-                if let Ok(inner) = inner {
-                    Ok((s, Term::Binary(inner)))
-                } else {
-                    Err(Error::Error(s))
+                match inner {
+                    Ok(inner) => Ok((s, Term::Binary(inner))),
+                    Err(e) => Err(Error::Error(s, ErrorKind::Utf8Error(e))),
                 }
             } else {
-                Err(Error::Error(s))
+                Err(Error::Incomplete(s, Needed::Needed(len - s.len())))
             }
         }
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(4 - input.len()))),
     }
 }
 
@@ -146,14 +146,14 @@ fn integer(s: &[u8]) -> Result<(&[u8], Term), Error> {
             let i = i32::from_be_bytes([*b1, *b2, *b3, *b4]);
             Ok((s, Term::Integer(i)))
         }
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(4 - input.len()))),
     }
 }
 
 fn small_integer(s: &[u8]) -> Result<(&[u8], Term), Error> {
     match s {
         [i, rest @ ..] => Ok((rest, Term::SmallInteger(*i))),
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(1))),
     }
 }
 
@@ -176,16 +176,16 @@ fn large_big(s: &[u8]) -> Result<(&[u8], Term), Error> {
                     if let Some(inner) = inner {
                         Ok((s, Term::BigInt(inner)))
                     } else {
-                        Err(Error::Error(s))
+                        Err(Error::Error(s, ErrorKind::InvalidBigInt))
                     }
                 } else {
-                    Err(Error::Error(s))
+                    Ok((s, Term::BigInt(num_bigint::BigInt::from(0))))
                 }
             } else {
-                Err(Error::Error(s))
+                Err(Error::Incomplete(s, Needed::Needed(n - s.len())))
             }
         }
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(5 - input.len()))),
     }
 }
 
@@ -203,21 +203,18 @@ fn small_big(s: &[u8]) -> Result<(&[u8], Term), Error> {
                 };
 
                 if !digits.is_empty() {
-                    let inner = num_bigint::BigInt::from_radix_le(sign, &digits, 256);
-
-                    if let Some(inner) = inner {
-                        Ok((s, Term::BigInt(inner)))
-                    } else {
-                        Err(Error::Error(s))
+                    match num_bigint::BigInt::from_radix_le(sign, &digits, 256) {
+                        Some(inner) => Ok((s, Term::BigInt(inner))),
+                        None => Err(Error::Error(s, ErrorKind::InvalidBigInt)),
                     }
                 } else {
-                    Err(Error::Error(s))
+                    Ok((s, Term::BigInt(num_bigint::BigInt::from(0))))
                 }
             } else {
-                Err(Error::Error(s))
+                Err(Error::Incomplete(s, Needed::Needed(n - s.len())))
             }
         }
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(2 - input.len()))),
     }
 }
 
@@ -227,7 +224,7 @@ fn new_float(s: &[u8]) -> Result<(&[u8], Term), Error> {
             let f = f64::from_be_bytes([*b1, *b2, *b3, *b4, *b5, *b6, *b7, *b8]);
             Ok((s, Term::Float(f.into())))
         }
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(8 - input.len()))),
     }
 }
 
@@ -235,9 +232,7 @@ fn list(s: &[u8]) -> Result<(&[u8], Term), Error> {
     match s {
         [b1, b2, b3, b4, s @ ..] => {
             let len = u32::from_be_bytes([*b1, *b2, *b3, *b4]) as usize;
-
-            let mut elements = Vec::with_capacity(len);
-
+            let mut elements = vec![];
             let mut s = s;
 
             for _ in 0..len {
@@ -254,7 +249,7 @@ fn list(s: &[u8]) -> Result<(&[u8], Term), Error> {
 
             Ok((s, Term::List(elements)))
         }
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(4 - input.len()))),
     }
 }
 
@@ -274,7 +269,7 @@ fn map(s: &[u8]) -> Result<(&[u8], Term), Error> {
 
             Ok((s, Term::Map(elements)))
         }
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(4 - input.len()))),
     }
 }
 
@@ -284,18 +279,15 @@ fn small_atom(s: &[u8]) -> Result<(&[u8], Term), Error> {
             let len = *len as usize;
             if len <= s.len() {
                 let (string_bytes, s) = s.split_at(len);
-                let inner = std::str::from_utf8(string_bytes);
-
-                if let Ok(inner) = inner {
-                    Ok((s, Term::Atom(inner)))
-                } else {
-                    Err(Error::Error(s))
+                match std::str::from_utf8(string_bytes) {
+                    Ok(inner) => Ok((s, Term::Atom(inner))),
+                    Err(e) => Err(Error::Error(s, ErrorKind::Utf8Error(e))),
                 }
             } else {
-                Err(Error::Error(s))
+                Err(Error::Incomplete(s, Needed::Needed(len - s.len())))
             }
         }
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(1))),
     }
 }
 
@@ -305,18 +297,15 @@ fn small_atom_utf8(s: &[u8]) -> Result<(&[u8], Term), Error> {
             let len = *len as usize;
             if len <= s.len() {
                 let (string_bytes, s) = s.split_at(len);
-                let inner = std::str::from_utf8(string_bytes);
-
-                if let Ok(inner) = inner {
-                    Ok((s, Term::Atom(inner)))
-                } else {
-                    Err(Error::Error(s))
+                match std::str::from_utf8(string_bytes) {
+                    Ok(inner) => Ok((s, Term::Atom(inner))),
+                    Err(e) => Err(Error::Error(s, ErrorKind::Utf8Error(e))),
                 }
             } else {
-                Err(Error::Error(s))
+                Err(Error::Incomplete(s, Needed::Needed(len - s.len())))
             }
         }
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(1))),
     }
 }
 
@@ -324,8 +313,7 @@ fn small_tuple(s: &[u8]) -> Result<(&[u8], Term), Error> {
     match s {
         [len, s @ ..] => {
             let len = *len as usize;
-            let mut elements = Vec::with_capacity(len);
-
+            let mut elements = vec![];
             let mut s = s;
 
             for _ in 0..len {
@@ -336,7 +324,7 @@ fn small_tuple(s: &[u8]) -> Result<(&[u8], Term), Error> {
 
             Ok((s, Term::Tuple(elements)))
         }
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(1))),
     }
 }
 
@@ -344,9 +332,7 @@ fn large_tuple(s: &[u8]) -> Result<(&[u8], Term), Error> {
     match s {
         [b1, b2, b3, b4, s @ ..] => {
             let len = u32::from_be_bytes([*b1, *b2, *b3, *b4]) as usize;
-
-            let mut elements = Vec::with_capacity(len);
-
+            let mut elements = vec![];
             let mut s = s;
 
             for _ in 0..len {
@@ -357,7 +343,7 @@ fn large_tuple(s: &[u8]) -> Result<(&[u8], Term), Error> {
 
             Ok((s, Term::Tuple(elements)))
         }
-        input => Err(Error::Error(input)),
+        input => Err(Error::Incomplete(input, Needed::Needed(4 - input.len()))),
     }
 }
 
@@ -401,14 +387,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_map() {
+    fn map() {
         let empty_map = [131, 116, 0, 0, 0, 0];
         let parsed = parse(&empty_map).unwrap();
         assert_eq!(parsed, Term::Map(BTreeMap::new()));
-    }
 
-    #[test]
-    fn string_map() {
         let map = [
             131, 116, 0, 0, 0, 1, 109, 0, 0, 0, 5, 104, 101, 108, 108, 111, 109, 0, 0, 0, 5, 116,
             104, 101, 114, 101,
@@ -418,6 +401,14 @@ mod tests {
         btm.insert(Term::Binary("hello"), Term::Binary("there"));
         let parsed = parse(&map).unwrap();
         assert_eq!(parsed, Term::Map(btm));
+
+        let no_key = [131, 116, 0, 0, 0, 1];
+        let parsed = parse(&no_key);
+        assert_eq!(Err(Error::Incomplete(&[], Needed::Needed(1))), parsed);
+
+        let no_value = [131, 116, 0, 0, 0, 1, 100, 0, 0];
+        let parsed = parse(&no_value);
+        assert_eq!(Err(Error::Incomplete(&[], Needed::Needed(1))), parsed);
     }
 
     #[test]
@@ -468,6 +459,15 @@ mod tests {
         let parsed = parse(&float).unwrap();
         let expected = Term::Float(32.1.into());
         assert_eq!(parsed, expected);
+
+        let missing_last_byte = [131, 70, 64, 64, 12, 204, 204, 204, 204];
+        assert_eq!(
+            Err(Error::Incomplete(
+                &[64, 64, 12, 204, 204, 204, 204],
+                Needed::Needed(1)
+            )),
+            parse(&missing_last_byte)
+        );
     }
 
     #[test]
@@ -490,6 +490,7 @@ mod tests {
         );
         assert_eq!(parsed, expected);
     }
+
     #[test]
     fn large_big() {
         // a really big number printed from an iex console
