@@ -1,0 +1,22 @@
+[package]
+name = "etf"
+version = "0.1.0"
+authors = ["Clark Kampfe <clark.kampfe@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+num-bigint = "0.3"
+ordered-float = "2.1"
+
+[dev-dependencies]
+criterion = { version = "0.3", features = ["html_reports"] }
+
+[[bench]]
+name = "bench"
+harness = false
+
+[profile.bench]
+codegen-units = 1
+lto = true
