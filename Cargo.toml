@@ -10,6 +10,10 @@ edition = "2018"
 num-bigint = "0.3"
 ordered-float = "2.1"
 
+[features]
+default = []
+preallocate = []
+
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"] }
 

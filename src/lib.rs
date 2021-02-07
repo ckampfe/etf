@@ -232,6 +232,9 @@ fn list(s: &[u8]) -> Result<(&[u8], Term), Error> {
     match s {
         [b1, b2, b3, b4, s @ ..] => {
             let len = u32::from_be_bytes([*b1, *b2, *b3, *b4]) as usize;
+            #[cfg(feature = "preallocate")]
+            let mut elements = Vec::with_capacity(len);
+            #[cfg(not(feature = "preallocate"))]
             let mut elements = vec![];
             let mut s = s;
 
@@ -313,6 +316,9 @@ fn small_tuple(s: &[u8]) -> Result<(&[u8], Term), Error> {
     match s {
         [len, s @ ..] => {
             let len = *len as usize;
+            #[cfg(feature = "preallocate")]
+            let mut elements = Vec::with_capacity(len);
+            #[cfg(not(feature = "preallocate"))]
             let mut elements = vec![];
             let mut s = s;
 
@@ -332,6 +338,9 @@ fn large_tuple(s: &[u8]) -> Result<(&[u8], Term), Error> {
     match s {
         [b1, b2, b3, b4, s @ ..] => {
             let len = u32::from_be_bytes([*b1, *b2, *b3, *b4]) as usize;
+            #[cfg(feature = "preallocate")]
+            let mut elements = Vec::with_capacity(len);
+            #[cfg(not(feature = "preallocate"))]
             let mut elements = vec![];
             let mut s = s;
 
