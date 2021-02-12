@@ -133,7 +133,7 @@ fn atom_utf8(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
 
             match inner {
                 Ok(inner) => Ok((s, Term::Atom(inner))),
-                Err(e) => Err(ETFError::Utf8Error(s, e.into())),
+                Err(e) => Err(ETFError::Utf8Error(s, e)),
             }
         }
         input => Err(ETFError::Incomplete(input, Needed::Needed(2 - input.len()))),
