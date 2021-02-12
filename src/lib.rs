@@ -38,14 +38,6 @@ pub enum Needed {
     Unknown,
 }
 
-macro_rules! ensure {
-    ($cond:expr, $err:expr $(,)?) => {
-        if !$cond {
-            return Err($err);
-        }
-    };
-}
-
 #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Term<'a> {
     Atom(&'a str),
@@ -62,6 +54,14 @@ pub enum Term<'a> {
     SmallInteger(u8),
     Tuple(Vec<Term<'a>>),
     BigInt(num_bigint::BigInt),
+}
+
+macro_rules! ensure {
+    ($cond:expr, $err:expr $(,)?) => {
+        if !$cond {
+            return Err($err);
+        }
+    };
 }
 
 pub fn parse(s: &[u8]) -> Result<Term, ETFError> {
