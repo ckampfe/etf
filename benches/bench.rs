@@ -19,5 +19,11 @@ fn big_list(c: &mut Criterion) {
     c.bench_function("decode_big_list", move |b| b.iter(|| etf::parse(&big_list)));
 }
 
-criterion_group!(benches, small_map, big_list);
+fn big_map(c: &mut Criterion) {
+    let big_map = std::fs::read("fixtures/big_map.etf").unwrap();
+
+    c.bench_function("decode_big_map", move |b| b.iter(|| etf::parse(&big_map)));
+}
+
+criterion_group!(benches, small_map, big_list, big_map);
 criterion_main!(benches);

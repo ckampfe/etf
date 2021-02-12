@@ -1,9 +1,11 @@
 #![forbid(unsafe_code)]
 use std::collections::BTreeMap;
+use thiserror::Error;
 
 const ATOM_TAG: u8 = 100;
 const ATOM_UTF8_TAG: u8 = 118;
 const BINARY_TAG: u8 = 109;
+// const BIT_BINARY_TAG: u8 = 77;
 const INTEGER_TAG: u8 = 98;
 const LARGE_BIG_TAG: u8 = 111;
 const LARGE_TUPLE_TAG: u8 = 105;
@@ -18,29 +20,40 @@ const SMALL_INTEGER_TAG: u8 = 97;
 const SMALL_TUPLE_TAG: u8 = 104;
 const VERSION_NUMBER_TAG: u8 = 131;
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum Error<'e> {
+#[derive(Error, Debug, Clone, Eq, PartialEq)]
+pub enum ETFError<'e> {
+    #[error("Could not create a valid BigInt from bytes")]
+    InvalidBigInt(&'e [u8]),
+    #[error("Invalid UTF-8")]
+    Utf8Error(&'e [u8], std::str::Utf8Error),
+    #[error("Invalid ETF version byte, should be 131")]
+    InvalidVersionByte(&'e [u8]),
+    #[error("More bytes needed")]
     Incomplete(&'e [u8], Needed),
-    Error(&'e [u8], ErrorKind),
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum ErrorKind {
-    InvalidBigInt,
-    Utf8Error(std::str::Utf8Error),
-    Unknown,
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Needed {
     Needed(usize),
     Unknown,
 }
 
+macro_rules! ensure {
+    ($cond:expr, $err:expr $(,)?) => {
+        if !$cond {
+            return Err($err);
+        }
+    };
+}
+
 #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Term<'a> {
     Atom(&'a str),
-    Binary(&'a str),
+    Binary(&'a [u8]),
+    // BitBinary {
+    //     significant_bits_of_last_byte: u8,
+    //     bytes: &'a [u8],
+    // },
     Integer(i32),
     List(Vec<Term<'a>>),
     Map(BTreeMap<Term<'a>, Term<'a>>),
@@ -51,16 +64,17 @@ pub enum Term<'a> {
     BigInt(num_bigint::BigInt),
 }
 
-pub fn parse(s: &[u8]) -> Result<Term, Error> {
+pub fn parse(s: &[u8]) -> Result<Term, ETFError> {
     let (_, term) = match s {
         [VERSION_NUMBER_TAG, rest @ ..] => term(rest)?,
-        input => return Err(Error::Error(input, ErrorKind::Unknown)),
+        [_other_start_byte, _rest @ ..] => return Err(ETFError::InvalidVersionByte(s)),
+        [] => return Err(ETFError::Incomplete(s, Needed::Needed(1))),
     };
 
     Ok(term)
 }
 
-fn term(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn term(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [ATOM_TAG, rest @ ..] => atom(rest),
         [BINARY_TAG, rest @ ..] => binary(rest),
@@ -70,6 +84,7 @@ fn term(s: &[u8]) -> Result<(&[u8], Term), Error> {
         [MAP_TAG, rest @ ..] => map(rest),
         [LIST_TAG, rest @ ..] => list(rest),
         [NIL_TAG, rest @ ..] => Ok((rest, Term::Nil)),
+        // [BIT_BINARY_TAG, rest @ ..] => bit_binary(rest),
         [SMALL_TUPLE_TAG, rest @ ..] => small_tuple(rest),
         [LARGE_TUPLE_TAG, rest @ ..] => large_tuple(rest),
         [ATOM_UTF8_TAG, rest @ ..] => atom_utf8(rest),
@@ -77,158 +92,196 @@ fn term(s: &[u8]) -> Result<(&[u8], Term), Error> {
         [SMALL_ATOM, rest @ ..] => small_atom(rest),
         [SMALL_BIG_TAG, rest @ ..] => small_big(rest),
         [LARGE_BIG_TAG, rest @ ..] => large_big(rest),
-        input => Err(Error::Incomplete(input, Needed::Needed(1))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(1))),
     }
 }
 
-fn atom(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn atom(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [a, b, s @ ..] => {
             let len = u16::from_be_bytes([*a, *b]) as usize;
-            if len <= s.len() {
-                let (string_bytes, s) = s.split_at(len);
-                match std::str::from_utf8(string_bytes) {
-                    Ok(inner) => Ok((s, Term::Atom(inner))),
-                    Err(e) => Err(Error::Error(s, ErrorKind::Utf8Error(e))),
-                }
-            } else {
-                Err(Error::Incomplete(s, Needed::Needed(len - s.len())))
+
+            ensure!(
+                len <= s.len(),
+                ETFError::Incomplete(s, Needed::Needed(len - s.len()))
+            );
+
+            let (string_bytes, s) = s.split_at(len);
+
+            match std::str::from_utf8(string_bytes) {
+                Ok(inner) => Ok((s, Term::Atom(inner))),
+                Err(e) => Err(ETFError::Utf8Error(s, e)),
             }
         }
-        input => Err(Error::Incomplete(input, Needed::Needed(2 - input.len()))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(2 - input.len()))),
     }
 }
 
-fn atom_utf8(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn atom_utf8(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [a, b, s @ ..] => {
             let len = u16::from_be_bytes([*a, *b]) as usize;
-            if len <= s.len() {
-                let (string_bytes, s) = s.split_at(len);
-                let inner = std::str::from_utf8(string_bytes);
 
-                match inner {
-                    Ok(inner) => Ok((s, Term::Atom(inner))),
-                    Err(e) => Err(Error::Error(s, ErrorKind::Utf8Error(e))),
-                }
-            } else {
-                Err(Error::Incomplete(s, Needed::Needed(len - s.len())))
+            ensure!(
+                len <= s.len(),
+                ETFError::Incomplete(s, Needed::Needed(len - s.len()))
+            );
+
+            let (string_bytes, s) = s.split_at(len);
+
+            let inner = std::str::from_utf8(string_bytes);
+
+            match inner {
+                Ok(inner) => Ok((s, Term::Atom(inner))),
+                Err(e) => Err(ETFError::Utf8Error(s, e.into())),
             }
         }
-        input => Err(Error::Incomplete(input, Needed::Needed(2 - input.len()))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(2 - input.len()))),
     }
 }
 
-fn binary(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn binary(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
-        [0, 0, 0, 0] => Ok((&[], Term::Binary(""))),
+        [0, 0, 0, 0] => Ok((&[], Term::Binary(b""))),
         [b1, b2, b3, b4, s @ ..] => {
             let len = u32::from_be_bytes([*b1, *b2, *b3, *b4]) as usize;
-            if len <= s.len() {
-                let (string_bytes, s) = s.split_at(len);
-                let inner = std::str::from_utf8(string_bytes);
 
-                match inner {
-                    Ok(inner) => Ok((s, Term::Binary(inner))),
-                    Err(e) => Err(Error::Error(s, ErrorKind::Utf8Error(e))),
-                }
-            } else {
-                Err(Error::Incomplete(s, Needed::Needed(len - s.len())))
-            }
+            ensure!(
+                len <= s.len(),
+                ETFError::Incomplete(s, Needed::Needed(len - s.len()))
+            );
+
+            let (string_bytes, s) = s.split_at(len);
+            Ok((s, Term::Binary(string_bytes)))
         }
-        input => Err(Error::Incomplete(input, Needed::Needed(4 - input.len()))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(4 - input.len()))),
     }
 }
 
-fn integer(s: &[u8]) -> Result<(&[u8], Term), Error> {
+// fn bit_binary(s: &[u8]) -> Result<(&[u8], Term), Error> {
+//     match s {
+//         [b1, b2, b3, b4, significant_bits_of_last_byte, s @ ..] => {
+//             let len = u32::from_be_bytes([*b1, *b2, *b3, *b4]) as usize;
+//             if len <= s.len() {
+//                 let (bytes, s) = s.split_at(len);
+//                 if !bytes.is_empty() {
+//                     Ok((
+//                         s,
+//                         Term::BitBinary {
+//                             significant_bits_of_last_byte: *significant_bits_of_last_byte,
+//                             bytes,
+//                         },
+//                     ))
+//                 } else {
+//                     Ok((
+//                         s,
+//                         Term::BitBinary {
+//                             significant_bits_of_last_byte: 0,
+//                             bytes: &[],
+//                         },
+//                     ))
+//                 }
+//             } else {
+//                 Err(Error::Incomplete(s, Needed::Needed(len - s.len())))
+//             }
+//         }
+//         input => Err(Error::Incomplete(input, Needed::Needed(5 - input.len()))),
+//     }
+// }
+
+fn integer(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [b1, b2, b3, b4, s @ ..] => {
             let i = i32::from_be_bytes([*b1, *b2, *b3, *b4]);
             Ok((s, Term::Integer(i)))
         }
-        input => Err(Error::Incomplete(input, Needed::Needed(4 - input.len()))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(4 - input.len()))),
     }
 }
 
-fn small_integer(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn small_integer(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [i, rest @ ..] => Ok((rest, Term::SmallInteger(*i))),
-        input => Err(Error::Incomplete(input, Needed::Needed(1))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(1))),
     }
 }
 
-fn large_big(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn large_big(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [b1, b2, b3, b4, sign_byte, s @ ..] => {
             let n = u32::from_be_bytes([*b1, *b2, *b3, *b4]) as usize;
-            if n <= s.len() {
-                let (digits, s) = s.split_at(n);
 
-                let sign = if sign_byte == &1u8 {
-                    num_bigint::Sign::Minus
+            ensure!(
+                n <= s.len(),
+                ETFError::Incomplete(s, Needed::Needed(n - s.len()))
+            );
+
+            let (digits, s) = s.split_at(n);
+
+            let sign = if sign_byte == &1u8 {
+                num_bigint::Sign::Minus
+            } else {
+                num_bigint::Sign::Plus
+            };
+
+            if !digits.is_empty() {
+                let inner = num_bigint::BigInt::from_radix_le(sign, &digits, 256);
+
+                if let Some(inner) = inner {
+                    Ok((s, Term::BigInt(inner)))
                 } else {
-                    num_bigint::Sign::Plus
-                };
-
-                if !digits.is_empty() {
-                    let inner = num_bigint::BigInt::from_radix_le(sign, &digits, 256);
-
-                    if let Some(inner) = inner {
-                        Ok((s, Term::BigInt(inner)))
-                    } else {
-                        Err(Error::Error(s, ErrorKind::InvalidBigInt))
-                    }
-                } else {
-                    Ok((s, Term::BigInt(num_bigint::BigInt::from(0))))
+                    Err(ETFError::InvalidBigInt(s))
                 }
             } else {
-                Err(Error::Incomplete(s, Needed::Needed(n - s.len())))
+                Ok((s, Term::BigInt(num_bigint::BigInt::from(0))))
             }
         }
-        input => Err(Error::Incomplete(input, Needed::Needed(5 - input.len()))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(5 - input.len()))),
     }
 }
 
-fn small_big(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn small_big(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [n, sign_byte, s @ ..] => {
             let n = *n as usize;
-            if n <= s.len() {
-                let (digits, s) = s.split_at(n as usize);
 
-                let sign = if sign_byte == &1u8 {
-                    num_bigint::Sign::Minus
-                } else {
-                    num_bigint::Sign::Plus
-                };
+            ensure!(
+                n <= s.len(),
+                ETFError::Incomplete(s, Needed::Needed(n - s.len()))
+            );
 
-                if !digits.is_empty() {
-                    match num_bigint::BigInt::from_radix_le(sign, &digits, 256) {
-                        Some(inner) => Ok((s, Term::BigInt(inner))),
-                        None => Err(Error::Error(s, ErrorKind::InvalidBigInt)),
-                    }
-                } else {
-                    Ok((s, Term::BigInt(num_bigint::BigInt::from(0))))
+            let (digits, s) = s.split_at(n as usize);
+
+            let sign = if sign_byte == &1u8 {
+                num_bigint::Sign::Minus
+            } else {
+                num_bigint::Sign::Plus
+            };
+
+            if !digits.is_empty() {
+                match num_bigint::BigInt::from_radix_le(sign, &digits, 256) {
+                    Some(inner) => Ok((s, Term::BigInt(inner))),
+                    None => Err(ETFError::InvalidBigInt(s)),
                 }
             } else {
-                Err(Error::Incomplete(s, Needed::Needed(n - s.len())))
+                Ok((s, Term::BigInt(num_bigint::BigInt::from(0))))
             }
         }
-        input => Err(Error::Incomplete(input, Needed::Needed(2 - input.len()))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(2 - input.len()))),
     }
 }
 
-fn new_float(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn new_float(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [b1, b2, b3, b4, b5, b6, b7, b8, s @ ..] => {
             let f = f64::from_be_bytes([*b1, *b2, *b3, *b4, *b5, *b6, *b7, *b8]);
             Ok((s, Term::Float(f.into())))
         }
-        input => Err(Error::Incomplete(input, Needed::Needed(8 - input.len()))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(8 - input.len()))),
     }
 }
 
-fn list(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn list(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [b1, b2, b3, b4, s @ ..] => {
             let len = u32::from_be_bytes([*b1, *b2, *b3, *b4]) as usize;
@@ -252,11 +305,11 @@ fn list(s: &[u8]) -> Result<(&[u8], Term), Error> {
 
             Ok((s, Term::List(elements)))
         }
-        input => Err(Error::Incomplete(input, Needed::Needed(4 - input.len()))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(4 - input.len()))),
     }
 }
 
-fn map(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn map(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [b1, b2, b3, b4, s @ ..] => {
             let number_of_pairs = u32::from_be_bytes([*b1, *b2, *b3, *b4]) as usize;
@@ -272,47 +325,53 @@ fn map(s: &[u8]) -> Result<(&[u8], Term), Error> {
 
             Ok((s, Term::Map(elements)))
         }
-        input => Err(Error::Incomplete(input, Needed::Needed(4 - input.len()))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(4 - input.len()))),
     }
 }
 
-fn small_atom(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn small_atom(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [len, s @ ..] => {
             let len = *len as usize;
-            if len <= s.len() {
-                let (string_bytes, s) = s.split_at(len);
-                match std::str::from_utf8(string_bytes) {
-                    Ok(inner) => Ok((s, Term::Atom(inner))),
-                    Err(e) => Err(Error::Error(s, ErrorKind::Utf8Error(e))),
-                }
-            } else {
-                Err(Error::Incomplete(s, Needed::Needed(len - s.len())))
+
+            ensure!(
+                len <= s.len(),
+                ETFError::Incomplete(s, Needed::Needed(len - s.len()))
+            );
+
+            let (string_bytes, s) = s.split_at(len);
+
+            match std::str::from_utf8(string_bytes) {
+                Ok(inner) => Ok((s, Term::Atom(inner))),
+                Err(e) => Err(ETFError::Utf8Error(s, e)),
             }
         }
-        input => Err(Error::Incomplete(input, Needed::Needed(1))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(1))),
     }
 }
 
-fn small_atom_utf8(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn small_atom_utf8(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [len, s @ ..] => {
             let len = *len as usize;
-            if len <= s.len() {
-                let (string_bytes, s) = s.split_at(len);
-                match std::str::from_utf8(string_bytes) {
-                    Ok(inner) => Ok((s, Term::Atom(inner))),
-                    Err(e) => Err(Error::Error(s, ErrorKind::Utf8Error(e))),
-                }
-            } else {
-                Err(Error::Incomplete(s, Needed::Needed(len - s.len())))
+
+            ensure!(
+                len <= s.len(),
+                ETFError::Incomplete(s, Needed::Needed(len - s.len()))
+            );
+
+            let (string_bytes, s) = s.split_at(len);
+
+            match std::str::from_utf8(string_bytes) {
+                Ok(inner) => Ok((s, Term::Atom(inner))),
+                Err(e) => Err(ETFError::Utf8Error(s, e)),
             }
         }
-        input => Err(Error::Incomplete(input, Needed::Needed(1))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(1))),
     }
 }
 
-fn small_tuple(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn small_tuple(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [len, s @ ..] => {
             let len = *len as usize;
@@ -330,11 +389,11 @@ fn small_tuple(s: &[u8]) -> Result<(&[u8], Term), Error> {
 
             Ok((s, Term::Tuple(elements)))
         }
-        input => Err(Error::Incomplete(input, Needed::Needed(1))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(1))),
     }
 }
 
-fn large_tuple(s: &[u8]) -> Result<(&[u8], Term), Error> {
+fn large_tuple(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [b1, b2, b3, b4, s @ ..] => {
             let len = u32::from_be_bytes([*b1, *b2, *b3, *b4]) as usize;
@@ -352,7 +411,7 @@ fn large_tuple(s: &[u8]) -> Result<(&[u8], Term), Error> {
 
             Ok((s, Term::Tuple(elements)))
         }
-        input => Err(Error::Incomplete(input, Needed::Needed(4 - input.len()))),
+        input => Err(ETFError::Incomplete(input, Needed::Needed(4 - input.len()))),
     }
 }
 
@@ -392,7 +451,7 @@ mod tests {
     fn string() {
         let string = [131, 109, 0, 0, 0, 5, 104, 101, 108, 108, 111];
         let parsed = parse(&string).unwrap();
-        assert_eq!(parsed, Term::Binary("hello"));
+        assert_eq!(parsed, Term::Binary(b"hello"));
     }
 
     #[test]
@@ -407,17 +466,17 @@ mod tests {
         ];
 
         let mut btm = BTreeMap::new();
-        btm.insert(Term::Binary("hello"), Term::Binary("there"));
+        btm.insert(Term::Binary(b"hello"), Term::Binary(b"there"));
         let parsed = parse(&map).unwrap();
         assert_eq!(parsed, Term::Map(btm));
 
         let no_key = [131, 116, 0, 0, 0, 1];
         let parsed = parse(&no_key);
-        assert_eq!(Err(Error::Incomplete(&[], Needed::Needed(1))), parsed);
+        assert_eq!(Err(ETFError::Incomplete(&[], Needed::Needed(1))), parsed);
 
         let no_value = [131, 116, 0, 0, 0, 1, 100, 0, 0];
         let parsed = parse(&no_value);
-        assert_eq!(Err(Error::Incomplete(&[], Needed::Needed(1))), parsed);
+        assert_eq!(Err(ETFError::Incomplete(&[], Needed::Needed(1))), parsed);
     }
 
     #[test]
@@ -433,7 +492,7 @@ mod tests {
             131, 108, 0, 0, 0, 1, 109, 0, 0, 0, 5, 104, 101, 108, 108, 111, 106,
         ];
         let parsed = parse(&list).unwrap();
-        let expected = Term::List(vec![Term::Binary("hello")]);
+        let expected = Term::List(vec![Term::Binary(b"hello")]);
         assert_eq!(parsed, expected);
     }
 
@@ -471,7 +530,7 @@ mod tests {
 
         let missing_last_byte = [131, 70, 64, 64, 12, 204, 204, 204, 204];
         assert_eq!(
-            Err(Error::Incomplete(
+            Err(ETFError::Incomplete(
                 &[64, 64, 12, 204, 204, 204, 204],
                 Needed::Needed(1)
             )),
@@ -549,7 +608,7 @@ mod tests {
         let mut map = BTreeMap::new();
         map.insert(Term::Atom("a"), Term::SmallInteger(73));
         map.insert(Term::Atom("b"), Term::Integer(8248));
-        map.insert(Term::Atom("c"), Term::Binary("hello"));
+        map.insert(Term::Atom("c"), Term::Binary(b"hello"));
         map.insert(Term::Atom("d"), Term::Atom("ok"));
         map.insert(Term::Atom("e"), Term::SmallInteger(99));
         let expected = Term::Map(map);
