@@ -5,7 +5,6 @@ use thiserror::Error;
 const ATOM_TAG: u8 = 100;
 const ATOM_UTF8_TAG: u8 = 118;
 const BINARY_TAG: u8 = 109;
-// const BIT_BINARY_TAG: u8 = 77;
 const INTEGER_TAG: u8 = 98;
 const LARGE_BIG_TAG: u8 = 111;
 const LARGE_TUPLE_TAG: u8 = 105;
@@ -40,17 +39,16 @@ pub enum Needed {
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Term<'a> {
-    Atom(&'a str),
+    Atom(&'a [u8]),
+    AtomUTF8(&'a str),
     Binary(&'a [u8]),
-    // BitBinary {
-    //     significant_bits_of_last_byte: u8,
-    //     bytes: &'a [u8],
-    // },
     Integer(i32),
     List(Vec<Term<'a>>),
     Map(BTreeMap<Term<'a>, Term<'a>>),
     Float(ordered_float::OrderedFloat<f64>),
     Nil,
+    SmallAtom(&'a [u8]),
+    SmallAtomUTF8(&'a str),
     SmallInteger(u8),
     Tuple(Vec<Term<'a>>),
     BigInt(num_bigint::BigInt),
@@ -84,7 +82,6 @@ fn term(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
         [MAP_TAG, rest @ ..] => map(rest),
         [LIST_TAG, rest @ ..] => list(rest),
         [NIL_TAG, rest @ ..] => Ok((rest, Term::Nil)),
-        // [BIT_BINARY_TAG, rest @ ..] => bit_binary(rest),
         [SMALL_TUPLE_TAG, rest @ ..] => small_tuple(rest),
         [LARGE_TUPLE_TAG, rest @ ..] => large_tuple(rest),
         [ATOM_UTF8_TAG, rest @ ..] => atom_utf8(rest),
@@ -108,10 +105,7 @@ fn atom(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
 
             let (string_bytes, s) = s.split_at(len);
 
-            match std::str::from_utf8(string_bytes) {
-                Ok(inner) => Ok((s, Term::Atom(inner))),
-                Err(e) => Err(ETFError::Utf8Error(s, e)),
-            }
+            Ok((s, Term::Atom(string_bytes)))
         }
         input => Err(ETFError::Incomplete(input, Needed::Needed(2 - input.len()))),
     }
@@ -132,7 +126,7 @@ fn atom_utf8(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
             let inner = std::str::from_utf8(string_bytes);
 
             match inner {
-                Ok(inner) => Ok((s, Term::Atom(inner))),
+                Ok(inner) => Ok((s, Term::AtomUTF8(inner))),
                 Err(e) => Err(ETFError::Utf8Error(s, e)),
             }
         }
@@ -157,37 +151,6 @@ fn binary(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
         input => Err(ETFError::Incomplete(input, Needed::Needed(4 - input.len()))),
     }
 }
-
-// fn bit_binary(s: &[u8]) -> Result<(&[u8], Term), Error> {
-//     match s {
-//         [b1, b2, b3, b4, significant_bits_of_last_byte, s @ ..] => {
-//             let len = u32::from_be_bytes([*b1, *b2, *b3, *b4]) as usize;
-//             if len <= s.len() {
-//                 let (bytes, s) = s.split_at(len);
-//                 if !bytes.is_empty() {
-//                     Ok((
-//                         s,
-//                         Term::BitBinary {
-//                             significant_bits_of_last_byte: *significant_bits_of_last_byte,
-//                             bytes,
-//                         },
-//                     ))
-//                 } else {
-//                     Ok((
-//                         s,
-//                         Term::BitBinary {
-//                             significant_bits_of_last_byte: 0,
-//                             bytes: &[],
-//                         },
-//                     ))
-//                 }
-//             } else {
-//                 Err(Error::Incomplete(s, Needed::Needed(len - s.len())))
-//             }
-//         }
-//         input => Err(Error::Incomplete(input, Needed::Needed(5 - input.len()))),
-//     }
-// }
 
 fn integer(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
@@ -341,10 +304,7 @@ fn small_atom(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
 
             let (string_bytes, s) = s.split_at(len);
 
-            match std::str::from_utf8(string_bytes) {
-                Ok(inner) => Ok((s, Term::Atom(inner))),
-                Err(e) => Err(ETFError::Utf8Error(s, e)),
-            }
+            Ok((s, Term::SmallAtom(string_bytes)))
         }
         input => Err(ETFError::Incomplete(input, Needed::Needed(1))),
     }
@@ -363,7 +323,7 @@ fn small_atom_utf8(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
             let (string_bytes, s) = s.split_at(len);
 
             match std::str::from_utf8(string_bytes) {
-                Ok(inner) => Ok((s, Term::Atom(inner))),
+                Ok(inner) => Ok((s, Term::SmallAtomUTF8(inner))),
                 Err(e) => Err(ETFError::Utf8Error(s, e)),
             }
         }
@@ -423,28 +383,28 @@ mod tests {
     fn atom() {
         let string = [131, 100, 0, 5, 104, 101, 108, 108, 111];
         let parsed = parse(&string).unwrap();
-        assert_eq!(parsed, Term::Atom("hello"));
+        assert_eq!(parsed, Term::Atom(b"hello"));
     }
 
     #[test]
     fn atom_utf8() {
         let string = [131, 118, 0, 5, 104, 101, 108, 108, 111];
         let parsed = parse(&string).unwrap();
-        assert_eq!(parsed, Term::Atom("hello"));
+        assert_eq!(parsed, Term::AtomUTF8("hello"));
     }
 
     #[test]
     fn small_atom() {
         let string = [131, 115, 5, 104, 101, 108, 108, 111];
         let parsed = parse(&string).unwrap();
-        assert_eq!(parsed, Term::Atom("hello"));
+        assert_eq!(parsed, Term::SmallAtom(b"hello"));
     }
 
     #[test]
     fn small_atom_utf8() {
         let string = [131, 119, 5, 104, 101, 108, 108, 111];
         let parsed = parse(&string).unwrap();
-        assert_eq!(parsed, Term::Atom("hello"));
+        assert_eq!(parsed, Term::SmallAtomUTF8("hello"));
     }
 
     #[test]
@@ -606,11 +566,11 @@ mod tests {
 
         let parsed = parse(&small_map).unwrap();
         let mut map = BTreeMap::new();
-        map.insert(Term::Atom("a"), Term::SmallInteger(73));
-        map.insert(Term::Atom("b"), Term::Integer(8248));
-        map.insert(Term::Atom("c"), Term::Binary(b"hello"));
-        map.insert(Term::Atom("d"), Term::Atom("ok"));
-        map.insert(Term::Atom("e"), Term::SmallInteger(99));
+        map.insert(Term::Atom(b"a"), Term::SmallInteger(73));
+        map.insert(Term::Atom(b"b"), Term::Integer(8248));
+        map.insert(Term::Atom(b"c"), Term::Binary(b"hello"));
+        map.insert(Term::Atom(b"d"), Term::Atom(b"ok"));
+        map.insert(Term::Atom(b"e"), Term::SmallInteger(99));
         let expected = Term::Map(map);
         assert_eq!(parsed, expected);
     }
@@ -624,11 +584,11 @@ mod tests {
         assert_eq!(
             parsed,
             Term::Tuple(vec![
-                Term::Atom("1"),
-                Term::Atom("2"),
-                Term::Atom("3"),
-                Term::Atom("4"),
-                Term::Atom("5"),
+                Term::Atom(b"1"),
+                Term::Atom(b"2"),
+                Term::Atom(b"3"),
+                Term::Atom(b"4"),
+                Term::Atom(b"5"),
             ])
         );
     }
@@ -645,7 +605,7 @@ mod tests {
             strs.push(s);
         }
         for i in 0..256 {
-            elements.push(Term::Atom(&strs[i]));
+            elements.push(Term::Atom(&strs[i].as_bytes()));
         }
 
         assert_eq!(parsed, Term::Tuple(elements));
