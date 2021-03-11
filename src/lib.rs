@@ -43,15 +43,16 @@ pub enum Term<'a> {
     AtomUTF8(&'a str),
     Binary(&'a [u8]),
     Integer(i32),
+    LargeBig(num_bigint::BigInt),
     List(Vec<Term<'a>>),
     Map(BTreeMap<Term<'a>, Term<'a>>),
     Float(ordered_float::OrderedFloat<f64>),
     Nil,
     SmallAtom(&'a [u8]),
     SmallAtomUTF8(&'a str),
+    SmallBig(num_bigint::BigInt),
     SmallInteger(u8),
     Tuple(Vec<Term<'a>>),
-    BigInt(num_bigint::BigInt),
 }
 
 macro_rules! ensure {
@@ -191,12 +192,12 @@ fn large_big(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
                 let inner = num_bigint::BigInt::from_radix_le(sign, &digits, 256);
 
                 if let Some(inner) = inner {
-                    Ok((s, Term::BigInt(inner)))
+                    Ok((s, Term::LargeBig(inner)))
                 } else {
                     Err(ETFError::InvalidBigInt(s))
                 }
             } else {
-                Ok((s, Term::BigInt(num_bigint::BigInt::from(0))))
+                Ok((s, Term::LargeBig(num_bigint::BigInt::from(0))))
             }
         }
         input => Err(ETFError::Incomplete(input, Needed::Needed(5 - input.len()))),
@@ -223,11 +224,11 @@ fn small_big(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
 
             if !digits.is_empty() {
                 match num_bigint::BigInt::from_radix_le(sign, &digits, 256) {
-                    Some(inner) => Ok((s, Term::BigInt(inner))),
+                    Some(inner) => Ok((s, Term::SmallBig(inner))),
                     None => Err(ETFError::InvalidBigInt(s)),
                 }
             } else {
-                Ok((s, Term::BigInt(num_bigint::BigInt::from(0))))
+                Ok((s, Term::SmallBig(num_bigint::BigInt::from(0))))
             }
         }
         input => Err(ETFError::Incomplete(input, Needed::Needed(2 - input.len()))),
@@ -506,7 +507,7 @@ mod tests {
 
         let parsed = parse(&small_big).unwrap();
 
-        let expected = Term::BigInt(
+        let expected = Term::SmallBig(
             num_bigint::BigInt::from_radix_le(
                 num_bigint::Sign::Plus,
                 &[
@@ -527,7 +528,7 @@ mod tests {
 
         let parsed = parse(&large_big).unwrap();
 
-        let expected = Term::BigInt(
+        let expected = Term::LargeBig(
             num_bigint::BigInt::from_radix_le(
                 num_bigint::Sign::Plus,
                 &[
