@@ -46,7 +46,7 @@ pub enum Term<'a> {
     LargeBig(num_bigint::BigInt),
     List(Vec<Term<'a>>),
     Map(BTreeMap<Term<'a>, Term<'a>>),
-    Float(ordered_float::OrderedFloat<f64>),
+    NewFloat(ordered_float::OrderedFloat<f64>),
     Nil,
     SmallAtom(&'a [u8]),
     SmallAtomUTF8(&'a str),
@@ -239,7 +239,7 @@ fn new_float(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [b1, b2, b3, b4, b5, b6, b7, b8, s @ ..] => {
             let f = f64::from_be_bytes([*b1, *b2, *b3, *b4, *b5, *b6, *b7, *b8]);
-            Ok((s, Term::Float(f.into())))
+            Ok((s, Term::NewFloat(f.into())))
         }
         input => Err(ETFError::Incomplete(input, Needed::Needed(8 - input.len()))),
     }
@@ -486,7 +486,7 @@ mod tests {
     fn new_float() {
         let float = [131, 70, 64, 64, 12, 204, 204, 204, 204, 205];
         let parsed = parse(&float).unwrap();
-        let expected = Term::Float(32.1.into());
+        let expected = Term::NewFloat(32.1.into());
         assert_eq!(parsed, expected);
 
         let missing_last_byte = [131, 70, 64, 64, 12, 204, 204, 204, 204];
