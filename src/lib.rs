@@ -188,7 +188,7 @@ fn large_big(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
             };
 
             if !digits.is_empty() {
-                let inner = num_bigint::BigInt::from_radix_le(sign, &digits, 256);
+                let inner = num_bigint::BigInt::from_radix_le(sign, digits, 256);
 
                 if let Some(inner) = inner {
                     Ok((s, Term::LargeBig(inner)))
@@ -222,7 +222,7 @@ fn small_big(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
             };
 
             if !digits.is_empty() {
-                match num_bigint::BigInt::from_radix_le(sign, &digits, 256) {
+                match num_bigint::BigInt::from_radix_le(sign, digits, 256) {
                     Some(inner) => Ok((s, Term::SmallBig(inner))),
                     None => Err(ETFError::InvalidBigInt(s)),
                 }
