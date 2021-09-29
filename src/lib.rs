@@ -137,7 +137,6 @@ fn atom_utf8(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
 
 fn binary(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
-        [0, 0, 0, 0] => Ok((&[], Term::Binary(b""))),
         [b1, b2, b3, b4, s @ ..] => {
             let len = u32::from_be_bytes([*b1, *b2, *b3, *b4]) as usize;
 
@@ -413,6 +412,10 @@ mod tests {
         let string = [131, 109, 0, 0, 0, 5, 104, 101, 108, 108, 111];
         let parsed = parse(&string).unwrap();
         assert_eq!(parsed, Term::Binary(b"hello"));
+
+        let string = [131, 109, 0, 0, 0, 0];
+        let parsed = parse(&string).unwrap();
+        assert_eq!(parsed, Term::Binary(b""));
     }
 
     #[test]
