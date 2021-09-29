@@ -8,7 +8,7 @@ edition = "2018"
 
 [dependencies]
 num-bigint = "0.4"
-ordered-float = "2.1"
+ordered-float = "2.8"
 thiserror = "1"
 
 [features]
