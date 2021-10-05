@@ -7,12 +7,13 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-num-bigint = "0.4"
+num-bigint = { version = "0.4", optional = true }
 ordered-float = "2.8"
 thiserror = "1"
 
 [features]
-default = []
+default = ["bigint"]
+bigint = ["num-bigint"]
 preallocate = []
 
 [dev-dependencies]

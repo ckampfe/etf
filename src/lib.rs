@@ -6,6 +6,7 @@ const ATOM_TAG: u8 = 100;
 const ATOM_UTF8_TAG: u8 = 118;
 const BINARY_TAG: u8 = 109;
 const INTEGER_TAG: u8 = 98;
+#[cfg(feature = "bigint")]
 const LARGE_BIG_TAG: u8 = 111;
 const LARGE_TUPLE_TAG: u8 = 105;
 const LIST_TAG: u8 = 108;
@@ -14,6 +15,7 @@ const NEW_FLOAT_TAG: u8 = 70;
 const NIL_TAG: u8 = 106;
 const SMALL_ATOM: u8 = 115;
 const SMALL_ATOM_UTF8_TAG: u8 = 119;
+#[cfg(feature = "bigint")]
 const SMALL_BIG_TAG: u8 = 110;
 const SMALL_INTEGER_TAG: u8 = 97;
 const SMALL_TUPLE_TAG: u8 = 104;
@@ -43,6 +45,7 @@ pub enum Term<'a> {
     AtomUTF8(&'a str),
     Binary(&'a [u8]),
     Integer(i32),
+    #[cfg(feature = "bigint")]
     LargeBig(num_bigint::BigInt),
     List(Vec<Term<'a>>),
     Map(BTreeMap<Term<'a>, Term<'a>>),
@@ -50,6 +53,7 @@ pub enum Term<'a> {
     Nil,
     SmallAtom(&'a [u8]),
     SmallAtomUTF8(&'a str),
+    #[cfg(feature = "bigint")]
     SmallBig(num_bigint::BigInt),
     SmallInteger(u8),
     Tuple(Vec<Term<'a>>),
@@ -88,7 +92,9 @@ fn term(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
         [ATOM_UTF8_TAG, rest @ ..] => atom_utf8(rest),
         [SMALL_ATOM_UTF8_TAG, rest @ ..] => small_atom_utf8(rest),
         [SMALL_ATOM, rest @ ..] => small_atom(rest),
+        #[cfg(feature = "bigint")]
         [SMALL_BIG_TAG, rest @ ..] => small_big(rest),
+        #[cfg(feature = "bigint")]
         [LARGE_BIG_TAG, rest @ ..] => large_big(rest),
         input => Err(ETFError::Incomplete(input, Needed::Needed(1))),
     }
@@ -169,6 +175,7 @@ fn small_integer(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     }
 }
 
+#[cfg(feature = "bigint")]
 fn large_big(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [b1, b2, b3, b4, sign_byte, s @ ..] => {
@@ -203,6 +210,7 @@ fn large_big(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     }
 }
 
+#[cfg(feature = "bigint")]
 fn small_big(s: &[u8]) -> Result<(&[u8], Term), ETFError> {
     match s {
         [n, sign_byte, s @ ..] => {
@@ -502,6 +510,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bigint")]
     #[test]
     fn small_big() {
         // a big number printed from an iex console
@@ -523,6 +532,7 @@ mod tests {
         assert_eq!(parsed, expected);
     }
 
+    #[cfg(feature = "bigint")]
     #[test]
     fn large_big() {
         // a really big number printed from an iex console
